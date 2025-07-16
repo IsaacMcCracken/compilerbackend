@@ -1,0 +1,5 @@
+@package test (
+	@fn(@T(int) x @T(int) y) @ret(@T(int) z) miauza (
+		return (+(+(x 0) y))
+	)
+)

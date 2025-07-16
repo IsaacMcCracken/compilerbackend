@@ -1,0 +1,16 @@
+@leaf(0.1) structs (
+	@cmt "I think this might be the way to go"
+	@struct vec2 (
+		 x(f32)
+		 y(f32)
+	)
+
+
+	@struct Entity (
+		@T(vec2) pos
+		@T(vec2) vel
+	)
+
+
+	@fn(x(f32) y(f32)))
+)
