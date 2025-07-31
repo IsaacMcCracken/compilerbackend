@@ -36,28 +36,22 @@ scope_lookup_symbol :: proc(f: ^Function, scope_node: ^Node, name: string) -> ^N
 }
 
 scope_update_symbol :: proc(f: ^Function, scope_node: ^Node, sym_name: string, sym_node: ^Node) -> (old: ^Node) {
-	recurse :: proc(f: ^Function, scope_node: ^Node, sym_name: string, sym_node: ^Node) -> ^Node {
-		if scope_node == nil do return nil
-		assert(scope_node.kind == .Scope)
 
-		scope := transmute(^Node_Scope)scope_node.vptr
-		slot, ok := scope.symbols[sym_name]
 
-		if !ok do return recurse(f, scope_node.inputs[1], sym_name, sym_node)
+	if scope_node == nil do return nil
+	assert(scope_node.kind == .Scope)
 
-		old := scope_node.inputs[slot]
-		set_node_input(f, scope_node, sym_node, slot)
-		scope_print(scope_node)
-		return old
+	scope := transmute(^Node_Scope)scope_node.vptr
+	slot, ok := scope.symbols[sym_name]
+
+	if ok {
+		old = scope_node.inputs[slot]
 	}
 
-
-	old = recurse(f, scope_node, sym_name, sym_node)
-
-	if old == nil {
-		scope_add_symbol(f, scope_node, sym_name, sym_node)
-	}
-
+	set_node_input(f, scope_node, sym_node, slot)
+	scope_add_symbol(f, scope_node, sym_name, sym_node)
+	 
+	scope_print(scope_node)
 
 	return old
 }
@@ -66,6 +60,18 @@ scope_add_symbol :: proc(f: ^Function, scope_node: ^Node, sym_name: string, sym_
 	slot := add_node_input(f, scope_node, sym_node)
 	scope := transmute(^Node_Scope)scope_node.vptr
 	scope.symbols[sym_name] = slot
+}
+
+get_scope_from_node :: proc(n: ^Node) -> (scope: ^Node, ok: bool) {
+	users := get_node_users(n)
+	for user in users {
+		unode, slot := unwrap_user(user) 
+		if unode != nil {
+			if unode.kind == .Scope do return unode, true
+		}
+	}
+
+	return
 }
 
 create_scope_node :: proc(f: ^Function, control: ^Node, prev_scope: ^Node = nil) -> (scope_node: ^Node) {

@@ -28,7 +28,7 @@ jit_test :: proc(fn: ^frontend.Fn_Decl) {
 	copy(fn_data, e.code[:])
 	vmem.protect(raw_data(fn_data), len(fn_data), {.Execute})
 
-	fn := transmute(proc(x, y: int) -> int)raw_data(fn_data)
-	result := fn(3, 4)
+	fn := transmute(proc(x: int) -> int)raw_data(fn_data)
+	result := fn(60)
 	fmt.println("Result:", result)
 }

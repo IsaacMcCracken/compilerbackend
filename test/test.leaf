@@ -1,5 +1,23 @@
 @package test (
-	@fn(@T(int) x @T(int) y) @ret(@T(int) z) miauza (
-		return (+(+(x 0) y))
+	@fn(@T(int) x) @ret(@T(int) z) miauza (
+		@var(@T(int) a) = (1)
+		@cond(==(x 1)) if (
+			=(a +(x 2))
+		) else (
+			=(a -(x 3))
+		)
+		return (a)
 	)
 )
+
+
+cmp rcx, 1
+jne else
+mov rax, rcx
+add rax, 2
+jmp end
+else:
+mov rax, rcx
+sub rax, 3
+end:
+ret

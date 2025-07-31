@@ -73,6 +73,28 @@ emit_x64 :: proc(f: ^Function, e: ^x64.Emitter) {
 				return reg
 			case .Proj:
 				return reg_args[n.vint]
+			case .If:
+				cond := n.inputs[1]
+				#partial switch cond.kind {
+					case .Equals:
+					case .Less_Than:
+					case .Less_Than_Equal:
+					case .Greater_Than:
+					case .Greater_Than_Equal:
+					case:
+						fmt.panicf("\n\t %v is not a supported branch", cond.kind)
+				}
+			case .Equals, .Less_Than, .Less_Than_Equal, .Greater_Than, .Greater_Than_Equal:
+				if n.inputs[0].kind == .Proj && n.inputs[1].kind == .Const {
+					lhs := recurse(e, n.inputs[0], i)
+					x64.encode_cmp_imm(e, lhs, n.inputs[1].vint)
+				} else {
+					lhs := recurse(e, n.inputs[0], i)
+					i^ += 1
+					rhs := recurse(e, n.inputs[1], i)
+					i^ -= 1
+					x64.encode_cmp(e, lhs, rhs)
+				}
 			case:
 				fmt.panicf("Error: got %v", n.kind)
 		}
@@ -81,6 +103,18 @@ emit_x64 :: proc(f: ^Function, e: ^x64.Emitter) {
 	}
 
 	i := 0
-	user, slot := unwrap_user(f.start.users[0])
-	recurse(e, user, &i)
+	// user, slot := unwrap_user(f.start.users[0])
+	for control := f.first; control.kind != .Return; control = get_next_control_node(control) {
+		recurse(e, control, &i)
+	}
+}
+
+get_next_control_node :: proc(n: ^Node) -> (ctrl: ^Node) {
+	wusers := get_node_users(n)
+	for wuser in wusers {
+		user, slot := unwrap_user(wuser)
+		if user != nil && user.type.kind == .Control do return user
+	}
+
+	return
 }

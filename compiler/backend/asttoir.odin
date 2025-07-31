@@ -21,7 +21,8 @@ to_ir_fn_decl :: proc(f: ^Function, fn: ^frontend.Fn_Decl) {
 }
 
 to_ir_body :: proc(f: ^Function, scope_node, prev_control: ^Node, block: ^frontend.Block) {
-	for stmt in block.stmts {
+	prev_control := prev_control
+	for stmt, stmt_index in block.stmts {
 		switch kind in stmt {
 			case ^frontend.Var_Decl:
 				node := to_ir_expression(f, scope_node,  kind.init)
@@ -34,19 +35,67 @@ to_ir_body :: proc(f: ^Function, scope_node, prev_control: ^Node, block: ^fronte
 				ret := create_return_node(f, prev_control, expr)
 			case ^frontend.If_Stmt:
 				if_node := create_node(f)
+				if_node.kind = .If
+				if_node.type = Node_Type{kind = .Control}
 				cond := to_ir_expression(f, scope_node,  kind.cond)
 				node_reserve_inputs(f, if_node, 2)
+				node_reserve_users(f, if_node, 2)
 				set_node_input(f, if_node, prev_control, 0)
 				set_node_input(f, if_node, cond, 1)
-				scope := create_scope_node(f, if_node, scope_node)
-				
-				if cond.kind == .Const && cond.vb32 == true {
-					to_ir_body(f, scope_node, prev_control, &kind.body)
-				} else {
-					to_ir_body(f, scope, if_node, &kind.body)
-				}			
+				true_case := create_proj_node(f, 0, if_node)
+				true_scope := create_scope_node(f, true_case, scope_node)
+				to_ir_body(f, true_scope, if_node, &kind.body)
+				if f.first == nil do f.first = if_node
+				prev_control = if_node
 			case ^frontend.Else_Stmt:
-	}	}
+				assert(prev_control.kind == .If)
+				false_case := create_proj_node(f, 1, prev_control)
+				false_scope := create_scope_node(f, false_case, scope_node)
+				to_ir_body(f, false_scope, prev_control, &kind.body)
+
+				// merge control
+
+				region := create_node(f)
+				region.kind = .Region
+
+				inner_scopes := [2]^Node{}
+				cases := get_node_users(prev_control)
+				assert(len(cases) == 2)
+
+				for some_case, i in cases {
+					real_case, _ := unwrap_user(some_case)
+					scope, ok := get_scope_from_node(real_case)
+					assert(ok)
+					inner_scopes[i] = scope
+				}
+
+				outer_symbol_table := transmute(^Node_Scope)scope_node.vptr
+				for sym_name, sym_slot in outer_symbol_table.symbols {
+					phi_inputs := [2]^Node{}
+					phi_count := 0
+
+					for inner in inner_scopes {
+						inner_symbol_table := transmute(^Node_Scope)inner.vptr
+
+						slot, ok := inner_symbol_table.symbols[sym_name]
+
+
+						if ok {
+
+							phi_inputs[phi_count] = inner.inputs[slot] 
+							phi_count += 1
+						}
+					}
+
+					if phi_count == 1 do phi_inputs[1] = scope_node.inputs[sym_slot]
+
+					if phi_count > 0 {
+						_ = create_phi_2(f, sym_name, scope_node, region, phi_inputs)
+					}
+				}
+
+
+	}	}	
 }
 
 

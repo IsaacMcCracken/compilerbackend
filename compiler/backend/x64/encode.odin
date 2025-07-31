@@ -1,6 +1,10 @@
 package x86_64
 
+import "core:fmt"
+
+
 Emitter :: struct {
+	branches: [dynamic]int,
 	code: [dynamic]byte,
 }
 
@@ -122,6 +126,33 @@ encode_add_imm :: proc(e: ^Emitter, reg: Register, imm: i64) {
 
 }
 
+encode_cmp :: proc(e: ^Emitter, a, b: Register) {
+	rex_prefix(e, b, a)
+	append(&e.code, 0x39)
+	reg_mod_rm_registers(e, b, a)
+}
+
+encode_cmp_imm :: proc(e: ^Emitter, r: Register, imm: i64) {
+	abs_imm := abs(imm)
+	if abs_imm <= i64(max(i8)) {
+		rex_prefix(e, Register(0), r)
+		append(&e.code, 0x83)
+		reg_mod_rm_registers(e, Register(0x7), r)
+		b := transmute(u8)i8(imm)
+		append(&e.code, b)
+	} else if abs_imm <= i64(max(i32)) {
+		rex_prefix(e, Register(0), r)
+		append(&e.code, 0x81)
+		reg_mod_rm_registers(e, Register(0x7), r)
+		imm32 := i32(imm)
+		imm32bytes := transmute([4]u8)imm32
+		for b in imm32bytes do append(&e.code, b)
+	} else {
+		fmt.panicf("\n\tcmp %v, 0x%X, the value 0x%X exceeds the maximum size of 0x%X", r, imm, imm, max(i32))
+	}
+
+}
+
 encode_ret :: proc(e: ^Emitter) {
 	append(&e.code, 0xC3)
 }
@@ -189,12 +220,11 @@ reg_mod_rm_registers :: proc(e: ^Emitter, reg, rm: Register) {
 	append(&e.code, b)
 }
 
-import "core:fmt"
 main :: proc() {
 	e := &Emitter{code = make([dynamic]byte)}
 
 	encode_vec_add_8xf32(e, .XMM0, .XMM1, .XMM12)
-
+	encode_cmp_imm(e, .RAX, 9_000_000_069)
 
 	for b in e.code {
 		fmt.printf("%02X ", b)

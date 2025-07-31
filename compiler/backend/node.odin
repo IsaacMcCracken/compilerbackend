@@ -35,6 +35,8 @@ Node_Kind :: enum u16 {
 	Start,
 	Return, // Return(Prev_Control, Return Expr)
 	If,		// If(Prev_Control, Condition)
+	Region,
+	Stop,
 	// values
 	Const,
 	Tuple,
@@ -116,7 +118,7 @@ Function :: struct {
 	node_free_list: ^Free_Node,
 	gvn_lookup: map[u64]^Node,
 	scheduled: [dynamic]^Node,
-	start, scope: ^Node
+	start, scope, first: ^Node
 }
 
 graph_builder_init :: proc(f: ^Function) {
@@ -138,6 +140,12 @@ node_reserve_inputs :: proc(f: ^Function, node: ^Node, cap: u16) {
 	node.inputcap = cap
 }
 
+node_reserve_users :: proc(f: ^Function, node: ^Node, cap: u16) {
+	assert(node.users == nil)
+	context.allocator = vmem.arena_allocator(&f.edge_arena)
+	node.users = make([^]Node_User, cap)
+	node.usercap = cap
+}
 
 create_fn_arg_node :: proc(f: ^Function, name: string, i: int) -> ^Node {
 	node := create_proj_node(f, i, f.start)
@@ -149,9 +157,13 @@ create_fn_arg_node :: proc(f: ^Function, name: string, i: int) -> ^Node {
 create_return_node :: proc(f: ^Function, prev_control, expr: ^Node) -> ^Node {
 	node := create_node(f)
 	node.kind = .Return
+	node.type = Node_Type{kind = .Control}
 	node_reserve_inputs(f, node, 2)
 	set_node_input(f, node, prev_control, 0)
 	set_node_input(f, node, expr, 1)
+
+	if f.first == nil do f.first = node 
+
 	return node
 }
 
@@ -165,6 +177,16 @@ create_proj_node :: proc(f: ^Function, i: int, input: ^Node) -> ^Node {
 	return node
 }
 
+create_phi_2 :: proc(f: ^Function, name: string, scope, region: ^Node, inputs: [2]^Node) -> ^Node {
+	node := create_node(f)
+	node_reserve_inputs(f, node, 3)
+	set_node_input(f, node, region, 0)
+	set_node_input(f, node, inputs[0], 1)
+	set_node_input(f, node, inputs[1], 2)
+	scope_update_symbol(f, scope, name, node)
+	return node
+}
+
 create_const_int_node :: proc(f: ^Function, v: i64) -> ^Node {
 	node := create_node(f)
 	node.kind = .Const
@@ -174,6 +196,8 @@ create_const_int_node :: proc(f: ^Function, v: i64) -> ^Node {
 	set_node_input(f, node, f.start, 0)
 	return node
 }
+
+
 
 create_bin_op_node :: proc(f: ^Function, op: Node_Kind, lhs, rhs: ^Node) -> ^Node {
 	node := create_node(f)
@@ -201,6 +225,12 @@ create_node :: proc(f: ^Function) -> ^Node {
 	return node
 }
 
+destroy_node :: proc(f: ^Function, n: ^Node) {
+	assert(n.userlen == 0)
+	inputs := get_node_inputs
+	for input, idx in .
+}
+
 unwrap_user :: proc(user: Node_User) -> (node: ^Node, slot: u16) {
 	return transmute(^Node)user.ptr, user.slot
 }
@@ -214,9 +244,24 @@ get_node_users :: proc(n: ^Node) -> []Node_User {
 	return n.users[:n.userlen]
 }
 
+// we want to remove the user from the input
+delete_node_input_user :: proc(f: ^Function, user, input: ^Node) -> (ok: bool) {
+	wusers := get_node_users(input) 
+	for wuser, idx in wusers {
+		ptr, slot := unwrap_user(wuser)
+		if ptr == user {
+			remove_user(input, wuser)
+			return true
+		}
+	}
+}
 
 set_node_input :: proc(f: ^Function, user, input: ^Node, slot: u16) {
-	assert(slot < user.inputcap) // will give us runtime error
+	assert(slot < user.inputlen) // will give us runtime error
+	old_input := user.inputs[slot]
+	if old_input != nil {
+
+	}
 	user.inputs[slot] = input
 	user.inputlen = max(user.inputlen, slot+1)
 	if input != nil do add_node_user(f, user, input, slot)
@@ -247,6 +292,35 @@ add_node_input :: proc(f: ^Function, user, input: ^Node) -> (slot: u16) {
 	return slot
 }
 
+
+remove_input :: proc(user: ^Node, input_idx: u16) {
+	raw_input_array := runtime.Raw_Dynamic_Array{
+		data = transmute(rawptr)user.inputs
+		len = int(user.inputlen)
+		cap = int(user.inputcap)
+	}
+
+	input_array := transmute([dynamic]^Node)
+	ordered_remove(&input_array, input_idx)
+}
+
+remove_user :: proc(node, user: ^Node) {
+	raw_user_array := runtime.Raw_Dynamic_Array{
+		data = transmute(rawptr)node.outputs
+		len = int(user.userlen)
+		cap = int(user.usercap)
+	}
+
+	user_array := transmute([dynamic]Node_User)
+
+	slot: int
+	for n, i in user_array {
+		if n == user do slot = i
+	}
+
+	unordered_remove(&user_array, slot)
+}
+
 add_node_user :: proc(f: ^Function, user, input: ^Node, slot: u16, reserve:u16=4) {
 	context.allocator = vmem.arena_allocator(&f.edge_arena)
 	if input.users == nil {
@@ -266,7 +340,7 @@ add_node_user :: proc(f: ^Function, user, input: ^Node, slot: u16, reserve:u16=4
 		input.usercap = u16(new_cap)
 	}
 
-	input.users[slot] = Node_User{
+	input.users[input.userlen] = Node_User{
 		ptr = transmute(uintptr)user,
 		slot = slot,
 	}
