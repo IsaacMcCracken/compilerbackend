@@ -1,15 +1,30 @@
 package backend
 
+import "core:fmt"
 
-peephole :: proc(f: ^Function, n: ^Node) -> (node: ^Node) {
-	#partial switch n.kind {
-		case .Equals, .Less_Than, .Less_Than_Equal, .Greater_Than, .Greater_Than_Equal:
-			return bool_peep(g, n)
-		case .Add, .Sub, .Mul, .Div:
-			return int_peep(g, n)
+peephole :: proc(f: ^Function, n: ^Node) -> (out: ^Node) {
+	node, ok := node_map_lookup(f, n)
+	if ok {
+		// kill n
+		out = node
+	} else {
+		node_map_insert(f, n)
+		out = n
 	}
 
-	return n
+	#partial switch n.kind {
+		case .Equals, .Less_Than, .Less_Than_Equal, .Greater_Than, .Greater_Than_Equal:
+			out = bool_peep(f, n)
+		case .Add, .Sub, .Mul, .Div:
+			out = int_peep(f, n)
+	}
+
+	if n.userlen == 0 {
+		// kill n
+	}
+
+
+	return out
 }
 
 @private node_position :: proc(n: ^Node) -> u8 {
@@ -20,48 +35,67 @@ peephole :: proc(f: ^Function, n: ^Node) -> (node: ^Node) {
 	}
 }
 
-int_peep :: proc(g: ^Function, n: ^Node) -> (out: ^Node) {
+int_peep :: proc(f: ^Function, n: ^Node) -> (out: ^Node) {
+	// binary operation peepholes
 	#partial switch n.kind {
 	case .Add, .Sub, .Mul, .Div:
 		lhs := n.inputs[0]
 		rhs := n.inputs[1]
-
-		#partial switch n.kind {
-			// switch constants and operators to the right hand side
-			// (4 + (x + 3)) ===> ((x + 3) + 4)
-			case .Add, .Mul:
+		// communitive peeholes
+		if n.kind == .Add || n.kind == .Mul {
+			// 5 + x = x + 5 --- C + (x + K) = (x + K) + C
 			if lhs.kind == .Const && rhs.kind != .Const {
-				n.inputs[0], n.inputs[1] = n.inputs[1], n.inputs[0] 
-				lhs = n.inputs[0]
-				rhs = n.inputs[1]			
-			} 
+				return create_bin_op_node(f, n.kind, rhs, lhs)
+			}
+			
+			// (x + K) + C = x + (K + C)
+			if lhs.kind == n.kind && lhs.inputs[1].kind == .Const && rhs.kind == .Const {
+				constfold := create_bin_op_node(f, n.kind, lhs.inputs[0], rhs)
+				return create_bin_op_node(f, n.kind, lhs, constfold)
+			}
 
-
-
-			// if the right hand side is a comunitive 
-			// operator we can rewrite the graph
-
-			// example ((x + 3) + 4)
-			// we can rewrite as (x + (3 + 4))
-			// so that we can peephole to make
-			// (x + 7)
-			if lhs.kind == n.kind {
-				n.inputs[0], n.inputs[1] = n.inputs[1], n.inputs[0] // operator is now on lhs
-				rhs = n.inputs[1]	
-				rhs.inputs[0], n.inputs[0] = n.inputs[0], rhs.inputs[0]
-				lhs = n.inputs[0]
-				rhs = n.inputs[1]	
-				int_peep(g, rhs)
+			// ((x + C) + y) = ((x + y) + C)
+			if lhs.kind == n.kind && lhs.inputs[1].kind == .Const && rhs.kind != .Const {
+				inner := create_bin_op_node(f, n.kind, lhs.inputs[0], rhs)
+				return create_bin_op_node(f, n.kind, inner, lhs.inputs[1])
 			}
 
 
-			if rhs.kind == .Const && rhs.vint == 0 {
-				n.kind = lhs.kind	
-				n.vint = lhs.vint
-			}
+
+	
 		}
 
+		// addition peepholes 
+		if n.kind == .Add {
+			// x + 0 = x
+			if rhs.kind == .Const && rhs.vint == 0 do return lhs
+			// x + x = 2 * x
+			if lhs == rhs do return create_bin_op_node(f, .Mul, lhs, create_const_int_node(f, 2))
+		}
+		// subtraction peepholes 
+		if n.kind == .Sub  {
+			// x - x = 0
+			if lhs == rhs do return create_const_int_node(f, 0)
+			// x - 0 = x
+			if rhs.kind == .Const && rhs.vint == 0 do return lhs
+		}
+
+		// multiplication peepholes
+		if n.kind == .Mul && rhs.kind == .Const {
+			// x * 0 = 0
+			if rhs.vint == 0 do return rhs
+			// x * 1 = x
+			if rhs.vint == 1 do return lhs
+		}
+		// division peepholes 
+		// x / 1 = x
+		if n.kind == .Div && rhs.kind == .Const && rhs.vint == 1 {
+			return lhs
+		}
+
+		// constant folding peephole
 		if lhs.kind == .Const && rhs.kind == .Const {
+			
 			result: i64
 			#partial switch n.kind {
 				case .Add: result = lhs.vint + rhs.vint
@@ -71,35 +105,39 @@ int_peep :: proc(g: ^Function, n: ^Node) -> (out: ^Node) {
 				case: unreachable()
 			}
 
-			// destroy_node(g, lhs)
-			// destroy_node(g, rhs)
+			return create_const_int_node(f, result)
 
-			n.kind = .Const
-			n.vint = result
 		}
 	}
+
+	return n
 }
 
-bool_peep :: proc(g: ^Function, n: ^Node) -> (out: ^Node) {
+bool_peep :: proc(f: ^Function, n: ^Node) -> (out: ^Node) {
 	lhs, rhs := n.inputs[0], n.inputs[1]
 
+	// if lhs == rhs {
+	// 	#partial switch n.kind {
+	// 		case .Equals: return 
+	// 	}
+	// }
+
+
+	// use identity to swap so that constants are on the right hand side
 	if lhs.kind == .Const && rhs.kind != .Const {
-		nlhs := n.inputs[1]
-		nrhs := n.inputs[0]
 
 
 		@static swap_map := #partial [Node_Kind]Node_Kind {
-			.Equals = .Equals
-			.Less_Than = .Greater_Than_Equal
-			.Less_Than_Equal = .Greater_Than
-			.Greater_Than = .Less_Than_Equal
-			.Greater_Than_Equal = .Less_Than
+			.Equals = .Equals,
+			.Less_Than = .Greater_Than_Equal,
+			.Less_Than_Equal = .Greater_Than,
+			.Greater_Than = .Less_Than_Equal,
+			.Greater_Than_Equal = .Less_Than,
 		}
 
 		kind := swap_map[n.kind]
 
-		destroy_node(f, n)
-		return create_bin_op_node(f, kind, nlhs, nrhs)
+		return create_bin_op_node(f, kind, rhs, lhs)
 	}
 
 	if lhs.kind == .Const && rhs.kind == .Const {
@@ -114,20 +152,11 @@ bool_peep :: proc(g: ^Function, n: ^Node) -> (out: ^Node) {
 			case .Greater_Than_Equal:	result = a >= b	
 			case: unreachable()
 		}
-			// disconect inputs
-		// inputs := get_node_inputs(n)
-		// for input in inputs {
-		// 	inputs_outputs := get_node_inputs(input)
-		// 	for output, i in inputs_outputs {
-		// 		if output == n {
-		// 			node_remove_user(g, input, i)
-		// 		}
-		// 	}
-		// }
 
-		n.kind = .Const
-		n.vb32 = result
+
+		return create_const_int_node(f, i64(result))
 	}
 
 	return n
 }
+

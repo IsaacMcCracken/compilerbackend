@@ -33,10 +33,10 @@ Node_Kind :: enum u16 {
 
 	// control flow
 	Start,
+	Stop,
 	Return, // Return(Prev_Control, Return Expr)
 	If,		// If(Prev_Control, Condition)
 	Region,
-	Stop,
 	// values
 	Const,
 	Tuple,
@@ -116,19 +116,30 @@ Function :: struct {
 	edge_arena: vmem.Arena,
 	used_space, dead_space: int, // used to trigger a gc step
 	node_free_list: ^Free_Node,
-	gvn_lookup: map[u64]^Node,
+	nmap: Node_Map,
 	scheduled: [dynamic]^Node,
 	start, scope, first: ^Node
 }
 
-graph_builder_init :: proc(f: ^Function) {
 
+graph_builder_init :: proc(f: ^Function) {
+	
 	err := vmem.arena_init_growing(&f.node_arena)
 	if err != nil {
 		return
 	}
 
 	err = vmem.arena_init_growing(&f.edge_arena)
+	if err != nil {
+		return
+	}
+
+
+	f.nmap, err = make_node_map(1<<8)
+	if err != nil {
+		return
+	}
+
 }
 
 
@@ -194,10 +205,13 @@ create_const_int_node :: proc(f: ^Function, v: i64) -> ^Node {
 	node.vint = v
 	node_reserve_inputs(f, node, 1)
 	set_node_input(f, node, f.start, 0)
+	node = peephole(f, node)
 	return node
 }
 
+// create_const_bool_node :: proc(f: ^Function, v: b32) {
 
+// }
 
 create_bin_op_node :: proc(f: ^Function, op: Node_Kind, lhs, rhs: ^Node) -> ^Node {
 	node := create_node(f)
@@ -206,7 +220,7 @@ create_bin_op_node :: proc(f: ^Function, op: Node_Kind, lhs, rhs: ^Node) -> ^Nod
 	set_node_input(f, node, lhs, 0)
 	set_node_input(f, node, rhs, 1)
 
-	peephole(f, node)
+	node = peephole(f, node)
 	return node 
 }
 
@@ -228,7 +242,7 @@ create_node :: proc(f: ^Function) -> ^Node {
 destroy_node :: proc(f: ^Function, n: ^Node) {
 	assert(n.userlen == 0)
 	inputs := get_node_inputs
-	for input, idx in .
+	// for input, idx in .
 }
 
 unwrap_user :: proc(user: Node_User) -> (node: ^Node, slot: u16) {
@@ -245,19 +259,19 @@ get_node_users :: proc(n: ^Node) -> []Node_User {
 }
 
 // we want to remove the user from the input
-delete_node_input_user :: proc(f: ^Function, user, input: ^Node) -> (ok: bool) {
-	wusers := get_node_users(input) 
-	for wuser, idx in wusers {
-		ptr, slot := unwrap_user(wuser)
-		if ptr == user {
-			remove_user(input, wuser)
-			return true
-		}
-	}
-}
+// delete_node_input_user :: proc(f: ^Function, user, input: ^Node) -> (ok: bool) {
+// 	wusers := get_node_users(input) 
+// 	for wuser, idx in wusers {
+// 		ptr, slot := unwrap_user(wuser)
+// 		if ptr == user {
+// 			remove_user(input, wuser)
+// 			return true
+// 		}
+// 	}
+// }
 
 set_node_input :: proc(f: ^Function, user, input: ^Node, slot: u16) {
-	assert(slot < user.inputlen) // will give us runtime error
+	assert(slot < user.inputcap) // will give us runtime error
 	old_input := user.inputs[slot]
 	if old_input != nil {
 
@@ -295,30 +309,43 @@ add_node_input :: proc(f: ^Function, user, input: ^Node) -> (slot: u16) {
 
 remove_input :: proc(user: ^Node, input_idx: u16) {
 	raw_input_array := runtime.Raw_Dynamic_Array{
-		data = transmute(rawptr)user.inputs
-		len = int(user.inputlen)
-		cap = int(user.inputcap)
+		data = transmute(rawptr)user.inputs,
+		len = int(user.inputlen),
+		cap = int(user.inputcap),
 	}
 
-	input_array := transmute([dynamic]^Node)
+	input_array := transmute([dynamic]^Node)raw_input_array
 	ordered_remove(&input_array, input_idx)
+
+	raw_input_array = transmute(runtime.Raw_Dynamic_Array)input_array
+
+	user.inputcap = u16(raw_input_array.cap)
+	user.inputlen = u16(raw_input_array.len)
+	user.inputs = transmute([^]^Node)raw_input_array.data
 }
 
 remove_user :: proc(node, user: ^Node) {
 	raw_user_array := runtime.Raw_Dynamic_Array{
-		data = transmute(rawptr)node.outputs
-		len = int(user.userlen)
-		cap = int(user.usercap)
+		data = transmute(rawptr)node.users,
+		len = int(user.userlen),
+		cap = int(user.usercap),
 	}
 
-	user_array := transmute([dynamic]Node_User)
+	user_array := transmute([dynamic]Node_User)raw_user_array
 
 	slot: int
 	for n, i in user_array {
-		if n == user do slot = i
+		unode, _ := unwrap_user(n)
+		if unode == user do slot = i
 	}
 
 	unordered_remove(&user_array, slot)
+
+	raw_user_array = transmute(runtime.Raw_Dynamic_Array)user_array
+
+	node.userlen = u16(raw_user_array.len)
+	node.usercap = u16(raw_user_array.cap)
+	node.users = transmute([^]Node_User)raw_user_array.data
 }
 
 add_node_user :: proc(f: ^Function, user, input: ^Node, slot: u16, reserve:u16=4) {

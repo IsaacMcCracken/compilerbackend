@@ -103,10 +103,17 @@ emit_x64 :: proc(f: ^Function, e: ^x64.Emitter) {
 	}
 
 	i := 0
-	// user, slot := unwrap_user(f.start.users[0])
-	for control := f.first; control.kind != .Return; control = get_next_control_node(control) {
-		recurse(e, control, &i)
+	// user, slot := unwrap_user(f.start.users[3])
+	// recurse(e, user, &i)
+
+	users := get_node_users(f.start)
+	for wuser in users {
+		user, slot := unwrap_user(wuser)
+		if user.kind == .Return do recurse(e, user, &i)
 	}
+	// for control := f.first; control.kind != .Return; control = get_next_control_node(control) {
+	// 	recurse(e, control, &i)
+	// }
 }
 
 get_next_control_node :: proc(n: ^Node) -> (ctrl: ^Node) {
