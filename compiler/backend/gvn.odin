@@ -25,9 +25,15 @@ node_equal_proc ::  proc "contextless" (a, b: ^Node) -> bool {
 
 node_hasher_proc ::  proc "contextless" (data: rawptr, seed: uintptr = 0) -> uintptr {
 	node := transmute(^Node)data
-	input_bytes := slice.to_bytes(node.inputs[:node.inputlen])
-	input_hash := hash.djb2(input_bytes)
-	return ((uintptr(node.kind)<<31) | uintptr(input_hash) ) + uintptr(node.vint)
+
+	#partial switch node.kind {
+		case .Start, .Stop:
+			return uintptr(node.kind)
+		case:
+			input_bytes := slice.to_bytes(node.inputs[:node.inputlen])
+			input_hash := hash.djb2(input_bytes)
+			return ((uintptr(node.kind)<<31) | uintptr(input_hash) ) + uintptr(node.vint)
+	}
 }
 
 node_map_lookup :: proc(f: ^Function, n: ^Node) -> (node: ^Node, ok: bool) {

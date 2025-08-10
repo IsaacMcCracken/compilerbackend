@@ -3,14 +3,6 @@ package backend
 import "core:fmt"
 
 peephole :: proc(f: ^Function, n: ^Node) -> (out: ^Node) {
-	node, ok := node_map_lookup(f, n)
-	if ok {
-		// kill n
-		out = node
-	} else {
-		node_map_insert(f, n)
-		out = n
-	}
 
 	#partial switch n.kind {
 		case .Equals, .Less_Than, .Less_Than_Equal, .Greater_Than, .Greater_Than_Equal:
@@ -18,11 +10,6 @@ peephole :: proc(f: ^Function, n: ^Node) -> (out: ^Node) {
 		case .Add, .Sub, .Mul, .Div:
 			out = int_peep(f, n)
 	}
-
-	if n.userlen == 0 {
-		// kill n
-	}
-
 
 	return out
 }
@@ -39,19 +26,21 @@ int_peep :: proc(f: ^Function, n: ^Node) -> (out: ^Node) {
 	// binary operation peepholes
 	#partial switch n.kind {
 	case .Add, .Sub, .Mul, .Div:
+		// 5 + (x + 4)
 		lhs := n.inputs[0]
 		rhs := n.inputs[1]
 		// communitive peeholes
 		if n.kind == .Add || n.kind == .Mul {
 			// 5 + x = x + 5 --- C + (x + K) = (x + K) + C
 			if lhs.kind == .Const && rhs.kind != .Const {
+				// (x + 4) + 5
 				return create_bin_op_node(f, n.kind, rhs, lhs)
 			}
 			
 			// (x + K) + C = x + (K + C)
 			if lhs.kind == n.kind && lhs.inputs[1].kind == .Const && rhs.kind == .Const {
-				constfold := create_bin_op_node(f, n.kind, lhs.inputs[0], rhs)
-				return create_bin_op_node(f, n.kind, lhs, constfold)
+				constfold := create_bin_op_node(f, n.kind, lhs.inputs[1], rhs)
+				return create_bin_op_node(f, n.kind, lhs.inputs[0], constfold)
 			}
 
 			// ((x + C) + y) = ((x + y) + C)

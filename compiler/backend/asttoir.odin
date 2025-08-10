@@ -1,22 +1,20 @@
 package backend
 
 import "../frontend"
-
+import "core:fmt"
 
 
 to_ir_fn_decl :: proc(f: ^Function, fn: ^frontend.Fn_Decl) {
-	start := create_node(f)
-	start.kind = .Start
-
-	f.start = start
-	fn_scope := create_scope_node(f, start)
+	f.start = create_start_node(f)
+	f.stop = create_stop_node(f)
+	fn_scope := create_scope_node(f, f.start)
 	f.scope = fn_scope
 	// add projections for parameters
 	for param, i in fn.params {
 		create_fn_arg_node(f, param.name, i)
 	}
 	// graph body
-	to_ir_body(f, fn_scope, start, &fn.body)
+	to_ir_body(f, fn_scope, f.start, &fn.body)
 	// add
 }
 
@@ -34,68 +32,45 @@ to_ir_body :: proc(f: ^Function, scope_node, prev_control: ^Node, block: ^fronte
 				expr := to_ir_expression(f, scope_node,  kind.expr)
 				ret := create_return_node(f, prev_control, expr)
 			case ^frontend.If_Stmt:
-				if_node := create_node(f)
-				if_node.kind = .If
-				if_node.type = Node_Type{kind = .Control}
 				cond := to_ir_expression(f, scope_node,  kind.cond)
-				node_reserve_inputs(f, if_node, 2)
-				node_reserve_users(f, if_node, 2)
-				set_node_input(f, if_node, prev_control, 0)
-				set_node_input(f, if_node, cond, 1)
-				true_case := create_proj_node(f, 0, if_node)
-				true_scope := create_scope_node(f, true_case, scope_node)
-				to_ir_body(f, true_scope, if_node, &kind.body)
-				if f.first == nil do f.first = if_node
-				prev_control = if_node
+				if_node, true_node, false_node := create_if_node(f, prev_control, cond)
+				true_scope := create_scope_node(f, true_node, scope_node)
+				to_ir_body(f, true_scope, true_node, &kind.body)
+				prev_control = false_node
+
+				region := create_region_node(f, true_node, false_node)
+
+				if stmt_index + 1 < len(block.stmts) {
+					else_stmt, else_ok := block.stmts[stmt_index + 1].(^frontend.Else_Stmt)
+					if else_ok {
+						false_scope := create_scope_node(f, false_node, scope_node)
+						to_ir_body(f, false_scope, false_node, &else_stmt.body)
+						
+						
+						continue
+					} 
+				} 
+
+				true_scope_map := transmute(^Node_Scope)true_scope.vptr
+				for name, slot in true_scope_map.symbols {
+					tnode := true_scope.inputs[slot]
+					fnode := scope_lookup_symbol(f, scope_node, name) 
+					if  fnode != nil {
+						create_phi(f, name, scope_node, region, tnode, fnode)
+					}
+				}
+
+
 			case ^frontend.Else_Stmt:
-				assert(prev_control.kind == .If)
-				false_case := create_proj_node(f, 1, prev_control)
-				false_scope := create_scope_node(f, false_case, scope_node)
-				to_ir_body(f, false_scope, prev_control, &kind.body)
-
-				// merge control
-
-				region := create_node(f)
-				region.kind = .Region
-
-				inner_scopes := [2]^Node{}
-				cases := get_node_users(prev_control)
-				assert(len(cases) == 2)
-
-				for some_case, i in cases {
-					real_case, _ := unwrap_user(some_case)
-					scope, ok := get_scope_from_node(real_case)
-					assert(ok)
-					inner_scopes[i] = scope
-				}
-
-				outer_symbol_table := transmute(^Node_Scope)scope_node.vptr
-				for sym_name, sym_slot in outer_symbol_table.symbols {
-					phi_inputs := [2]^Node{}
-					phi_count := 0
-
-					for inner in inner_scopes {
-						inner_symbol_table := transmute(^Node_Scope)inner.vptr
-
-						slot, ok := inner_symbol_table.symbols[sym_name]
+				continue
 
 
-						if ok {
+		}	
 
-							phi_inputs[phi_count] = inner.inputs[slot] 
-							phi_count += 1
-						}
-					}
+		if prev_control.kind == .Proj && prev_control.inputs[0].kind == .If {
 
-					if phi_count == 1 do phi_inputs[1] = scope_node.inputs[sym_slot]
-
-					if phi_count > 0 {
-						_ = create_phi_2(f, sym_name, scope_node, region, phi_inputs)
-					}
-				}
-
-
-	}	}	
+		}
+	}	
 }
 
 

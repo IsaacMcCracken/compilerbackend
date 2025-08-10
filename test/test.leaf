@@ -1,5 +1,10 @@
 @package test (
 	@fn(@T(int) x) @ret(int) miauza (
-		return (+(5 +(x 4)))
+		@var(@T(int) c) = (3)
+		@cond(==(x 1)) if (
+			=(c 4)
+		)
+
+		return (c)
 	)
 )

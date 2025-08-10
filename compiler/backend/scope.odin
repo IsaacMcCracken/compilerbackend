@@ -11,12 +11,13 @@ scope_print :: proc(scope_node: ^Node) {
 	fmt.printf("scope @%p [\n", scope_node)
 	for key, slot in scope.symbols {
 		node := scope_node.inputs[slot]
-		fmt.printf("\t%s:\t%04d @%p\n", key, node.vint, node)
+		fmt.printf("\t%s: %v %v\t= %04d @%p\n", key, node.kind, node.type.kind, node.vint, node)
 	}
 
 	fmt.printf("]\n")
 
 }
+
 
 scope_lookup_symbol :: proc(f: ^Function, scope_node: ^Node, name: string) -> ^Node {
 	recurse :: proc(f: ^Function, scope_node: ^Node, sym_name: string) -> ^Node {
@@ -35,10 +36,18 @@ scope_lookup_symbol :: proc(f: ^Function, scope_node: ^Node, name: string) -> ^N
 	return recurse(f, scope_node, name)
 }
 
+scope_has_symbol :: proc(scope_node: ^Node, name: string) -> (node: ^Node, ok: bool) {
+	assert(scope_node.kind == .Scope)
+
+	scope := transmute(^Node_Scope)scope_node.vptr
+	slot, lok := scope.symbols[name]
+	
+	if lok do return scope_node.inputs[slot], true
+
+	return	
+}
+
 scope_update_symbol :: proc(f: ^Function, scope_node: ^Node, sym_name: string, sym_node: ^Node) -> (old: ^Node) {
-
-
-	if scope_node == nil do return nil
 	assert(scope_node.kind == .Scope)
 
 	scope := transmute(^Node_Scope)scope_node.vptr
@@ -75,13 +84,18 @@ get_scope_from_node :: proc(n: ^Node) -> (scope: ^Node, ok: bool) {
 }
 
 create_scope_node :: proc(f: ^Function, control: ^Node, prev_scope: ^Node = nil) -> (scope_node: ^Node) {
-	node := create_node(f)
-	node.kind = .Scope
 	scope := new(Node_Scope, vmem.arena_allocator(&f.edge_arena))
 	scope.symbols = make(map[string]u16, 11)
-	node.vptr = transmute(rawptr)scope
+
+	node := &Node{
+		kind = .Scope,
+		vptr = scope
+	}
+
 	node_reserve_inputs(f, node, 8)
 	set_node_input(f, node, control, 0)
 	set_node_input(f, node, prev_scope, 1)	
+
+	node = create_node(f, node)
 	return node
 }

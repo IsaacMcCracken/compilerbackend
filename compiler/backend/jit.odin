@@ -17,23 +17,28 @@ jit_test :: proc(fn: ^frontend.Fn_Decl) {
 	to_ir_fn_decl(g, fn)
 	// node_walker := make(map[^Node]rl.Vector2)
 	// window_viewer(g, &node_walker)
+
+	fmt.println("return", g.stop.inputs[0].inputs[1])
+
 	emit_x64(g, e)
 
-	for b, i in e.code {
-		fmt.printf("0x%02X ", b)
+
+	if len(e.code) > 0 {
+		for b, i in e.code {
+			fmt.printf("0x%02X ", b)
+		}
+	
+	
+		arena := vmem.Arena{}
+		err := vmem.arena_init_static(&arena, len(e.code), len(e.code))
+		fn_data := make([]byte, len(e.code), vmem.arena_allocator(&arena))
+		copy(fn_data, e.code[:])
+		vmem.protect(raw_data(fn_data), len(fn_data), {.Execute})
+	
+		fn := transmute(proc(x: int) -> int)raw_data(fn_data)
+		result := fn(60)
+		fmt.println("Result:", result)
 	}
-
-	fmt.printf("\n")
-
-	arena := vmem.Arena{}
-	err := vmem.arena_init_static(&arena, len(e.code), len(e.code))
-	fn_data := make([]byte, len(e.code), vmem.arena_allocator(&arena))
-	copy(fn_data, e.code[:])
-	vmem.protect(raw_data(fn_data), len(fn_data), {.Execute})
-
-	fn := transmute(proc(x: int) -> int)raw_data(fn_data)
-	result := fn(60)
-	fmt.println("Result:", result)
 }
 
 

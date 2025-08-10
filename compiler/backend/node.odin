@@ -1,5 +1,6 @@
 package backend
 import "base:runtime"
+import "core:c"
 import vmem "core:mem/virtual"
 import "core:mem"
 import "core:slice"
@@ -39,6 +40,7 @@ Node_Kind :: enum u16 {
 	Region,
 	// values
 	Const,
+	Phi,
 	Tuple,
 	Proj,
 	// Helpers
@@ -118,7 +120,7 @@ Function :: struct {
 	node_free_list: ^Free_Node,
 	nmap: Node_Map,
 	scheduled: [dynamic]^Node,
-	start, scope, first: ^Node
+	start, stop, scope: ^Node
 }
 
 
@@ -164,48 +166,140 @@ create_fn_arg_node :: proc(f: ^Function, name: string, i: int) -> ^Node {
 	return node
 }
 
+create_if_node :: proc(f: ^Function, prev_control, condition: ^Node) -> (nif, ntrue, nfalse: ^Node) {
+	nif = &Node{
+		kind = .If,
+		type = {kind = .Control}
+	}
+
+	node_reserve_inputs(f, nif, 2)
+	node_reserve_users(f, nif, 3)
+
+	set_node_input(f, nif, prev_control, 0)
+	set_node_input(f, nif, condition, 1)
+
+	nif = create_node(f, nif)
+
+	ntrue = create_proj_node(f, 0, nif)
+	nfalse = create_proj_node(f, 1, nif)
+
+
+	return
+}
+
+
 
 create_return_node :: proc(f: ^Function, prev_control, expr: ^Node) -> ^Node {
-	node := create_node(f)
-	node.kind = .Return
-	node.type = Node_Type{kind = .Control}
+	node := &Node{
+		kind = .Return,
+		type = {kind = .Control}
+	}
+
 	node_reserve_inputs(f, node, 2)
 	set_node_input(f, node, prev_control, 0)
 	set_node_input(f, node, expr, 1)
 
-	if f.first == nil do f.first = node 
-
+	node = create_node(f, node)
+	
+	add_node_input(f, f.stop, node)
 	return node
 }
 
+create_region_node :: proc(f: ^Function, controls: ..^Node) -> (node: ^Node) {
+	node = &Node{
+		kind = .Region,
+		type = {kind = .Control}
+	}
+	node_reserve_inputs(f, node, u16(len(controls)))
+
+	for c in controls {
+		add_node_input(f, node, c)
+	}
+
+	node = create_node(f, node)
+	return node
+}
+
+create_region_from_scopes :: proc(f: ^Function, scope_a, scope_b: ^Node) -> (region:  ^Node) {
+	assert(scope_a.inputs[0] == scope_b.inputs[0])
+	assert(scope_a.kind == .Scope && scope_b.kind == .Scope)
+	/*
+		1. for all symbols in scope a if its in scope b create a phi and update the symbol
+		in parent scope
+
+		2.    
+		r
+	*/
+	return
+}
+
 create_proj_node :: proc(f: ^Function, i: int, input: ^Node) -> ^Node {
-	node := create_node(f)
+	node := &Node{
+		kind = .Proj,
+	}
 	node.kind = .Proj
 	node.vint = i64(i)
 	node_reserve_inputs(f, node, 1)
 	set_node_input(f, node, input, 0)
+	// fix this
+	#partial switch input.kind {
+		case .If: node.type.kind = .Control
+		case .Start: node.type.kind = .I64
+	}
 
+	node = create_node(f, node)
 	return node
 }
 
-create_phi_2 :: proc(f: ^Function, name: string, scope, region: ^Node, inputs: [2]^Node) -> ^Node {
-	node := create_node(f)
-	node_reserve_inputs(f, node, 3)
+create_phi :: proc(f: ^Function, name: string, scope, region: ^Node, inputs: ..^Node) -> ^Node {
+	node := &Node{
+		kind = .Phi
+	}
+	node_reserve_inputs(f, node, 1 + u16(len(inputs)))
 	set_node_input(f, node, region, 0)
-	set_node_input(f, node, inputs[0], 1)
-	set_node_input(f, node, inputs[1], 2)
+
+	type := Node_Type{}
+	for input in inputs {
+		if type.kind == .Void do type = input.type
+		else do assert(input.type == type)
+		add_node_input(f, node, input)
+	}
+
+	node = create_node(f, node)
 	scope_update_symbol(f, scope, name, node)
 	return node
 }
 
 create_const_int_node :: proc(f: ^Function, v: i64) -> ^Node {
-	node := create_node(f)
-	node.kind = .Const
-	node.type.kind = .I64
-	node.vint = v
+	node := &Node {
+		kind = .Const,
+		type = {kind = .I64},
+		vint = v,
+	}
 	node_reserve_inputs(f, node, 1)
 	set_node_input(f, node, f.start, 0)
-	node = peephole(f, node)
+
+	node = create_node(f, node)
+	return node
+}
+
+create_start_node :: proc(f: ^Function) -> ^Node {
+	node := &Node{
+		kind = .Start,
+		type = {kind = .Control}
+	}
+
+	node = create_node(f, node)
+	return node
+}
+
+create_stop_node :: proc(f: ^Function) -> ^Node {
+	node := &Node{
+		kind = .Stop,
+		type = {kind = .Control}
+	}
+
+	node = create_node(f, node)
 	return node
 }
 
@@ -213,28 +307,41 @@ create_const_int_node :: proc(f: ^Function, v: i64) -> ^Node {
 
 // }
 
+is_if_projection :: proc(n: ^Node) -> (ok :bool) {
+	return n.kind == .Proj && n.inputs[0].kind == .If && n.vint < 2
+}
+
 create_bin_op_node :: proc(f: ^Function, op: Node_Kind, lhs, rhs: ^Node) -> ^Node {
-	node := create_node(f)
-	node.kind = op
+	node := &Node{
+		kind = op
+	}
 	node_reserve_inputs(f, node, 2)
 	set_node_input(f, node, lhs, 0)
 	set_node_input(f, node, rhs, 1)
 
+	node = create_node(f, node)
 	node = peephole(f, node)
 	return node 
 }
 
-create_node :: proc(f: ^Function) -> ^Node {
-	context.allocator = vmem.arena_allocator(&f.node_arena)
-	if f.node_free_list == nil {
-		node := new(Node)
-		return node
+create_node :: proc(f: ^Function, n: ^Node) -> (node: ^Node) {
+	if n != nil {
+		ok: bool
+		node, ok = node_map_lookup(f, n)
+		if ok do return node
 	}
 
-	node := &f.node_free_list.node
-	f.node_free_list = f.node_free_list.next
-
-	mem.zero_item(node)
+	context.allocator = vmem.arena_allocator(&f.node_arena)
+	if f.node_free_list == nil {
+		node = new(Node)
+	} else {
+		node = &f.node_free_list.node
+		f.node_free_list = f.node_free_list.next
+	
+	}
+	
+	mem.copy(node, n, size_of(Node))
+	node_map_insert(f, node)
 
 	return node
 }
@@ -282,6 +389,9 @@ set_node_input :: proc(f: ^Function, user, input: ^Node, slot: u16) {
 }
 
 add_node_input :: proc(f: ^Function, user, input: ^Node) -> (slot: u16) {
+	if user.inputs == nil {
+		node_reserve_inputs(f, user, 4)
+	}
 	if user.inputlen >= user.inputcap {
 		new_cap := 2*int(user.inputcap)
 		if new_cap >= int(max(u16)) {
@@ -305,6 +415,7 @@ add_node_input :: proc(f: ^Function, user, input: ^Node) -> (slot: u16) {
 
 	return slot
 }
+
 
 
 remove_input :: proc(user: ^Node, input_idx: u16) {
