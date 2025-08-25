@@ -132,6 +132,28 @@ convert_if_statement :: proc(c: ^Converter, n: ^format.Node) -> (stmt: ^If_Stmt,
 	return 
 }
 
+
+convert_while_statement :: proc(c: ^Converter, n: ^format.Node) -> (stmt: ^While_Stmt, ok: bool) {
+	expr: Any_Expr
+
+	iter := format.iterator_head(n.tags)
+	for tag in format.iterate_next(&iter) {
+		tag_name := format.get_name(c, tag)
+		if tag_name == "cond" && format.is_singleton(&tag.children) {
+			ok = true
+			expr = convert_expression(c, tag.children.head)
+		}
+	}
+
+	if ok {
+		stmt = new(While_Stmt)
+		stmt.cond = expr
+		stmt.body = convert_block(c, n.children)
+	}
+
+	return 
+}
+
 convert_expression :: proc(c: ^Converter, n: ^format.Node) -> Any_Expr {
 
 	name := format.get_name(c, n)
@@ -218,6 +240,11 @@ convert_block :: proc(c: ^Converter, list: format.List) -> (block: Block) {
 					update.name = format.get_name(c, stmt.children.head)
 					update.expr = convert_expression(c, stmt.children.tail)
 					block.stmts[i] = update
+				}
+			case "while":
+				_while, wok := convert_while_statement(c, stmt)
+				if wok {
+					block.stmts[i] = _while
 				}
 			case:
 

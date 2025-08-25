@@ -60,6 +60,11 @@ Binary_Expr :: struct {
 	op: Binary_Op
 }
 
+While_Stmt :: struct {
+	cond: Any_Expr,
+	body: Block,
+}
+
 If_Stmt :: struct {
 	cond: Any_Expr,
 	body: Block,
@@ -95,7 +100,7 @@ Any_Stmt :: union #shared_nil {
 	^Return_Stmt,
 	^If_Stmt,
 	^Else_Stmt,
-
+	^While_Stmt
 }
 
 Any_Decl :: union #shared_nil {

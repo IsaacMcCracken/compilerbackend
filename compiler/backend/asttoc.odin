@@ -56,10 +56,15 @@ to_c_statement :: proc(stmt: frontend.Any_Stmt, b: ^strings.Builder, indent: int
 		strings.write_string(b, "if (")
 		to_c_expression(kind.cond, b)
 		strings.write_string(b, ")\n")
-		to_c_block(kind.body, b)
+		to_c_block(kind.body, b, indent)
 	case ^frontend.Else_Stmt: 
 		strings.write_string(b, "else\n")
 		to_c_block(kind.body, b)
+	case ^frontend.While_Stmt:
+		strings.write_string(b, "while (")
+		to_c_expression(kind.cond, b)
+		strings.write_string(b, ")\n")
+		to_c_block(kind.body, b, indent)
 	}
 }
 
@@ -70,6 +75,7 @@ to_c_expression :: proc(expr: frontend.Any_Expr, b: ^strings.Builder) {
 		.Sub = "-",
 		.Mul = "*",
 		.Div = "/",
+		.Equals = "==",
 		.Less_Than = "<",
 		.Less_Than_Equal = "<=",
 		.Greater_Than = ">",

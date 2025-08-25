@@ -31,6 +31,8 @@ to_ir_body :: proc(f: ^Function, scope_node, prev_control: ^Node, block: ^fronte
 			case ^frontend.Return_Stmt:
 				expr := to_ir_expression(f, scope_node,  kind.expr)
 				ret := create_return_node(f, prev_control, expr)
+			case ^frontend.While_Stmt:
+				cond := to_ir_expression(f, scope_node, kind.cond)
 			case ^frontend.If_Stmt:
 				cond := to_ir_expression(f, scope_node,  kind.cond)
 				if_node, true_node, false_node := create_if_node(f, prev_control, cond)
